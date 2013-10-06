@@ -314,6 +314,45 @@ void queue_str_task2()
 	queue_str_task("Hello 2\n", 50);
 }
 
+void serial_cmd_task()
+{
+    int fdout, fdin;
+    char hint[8] = "DShell>";
+    char str[100];
+    char cx[2] = {0};
+    int char_count;
+    int done;
+    
+	fdout = mq_open("/tmp/mqueue/out", 0);
+	fdin = open("/dev/tty0/in", 0);
+
+    while(1)
+    {
+        write(fdout, hint, 8);
+        char_count = 0;
+        done = 0;
+        do
+        {
+            read(fdin, &cx[0], 1);
+		    //write(fdout, cx, 2);
+			if(char_count >= 97 || (cx[0] == '\r') || (cx[0] == '\n'))
+            {
+                write(fdout, "\r\n\0", 3);
+				str[char_count] = '\r';
+				str[char_count+1] = '\n';
+				str[char_count+2] = '\0';
+				done = -1;
+            }
+            else
+            {
+                str[char_count++] = cx[0];
+		        write(fdout, cx, 2);
+            }
+        } while(!done);
+		write(fdout, str, char_count+1+1+1);
+    }
+}
+
 void serial_readwrite_task()
 {
 	int fdout, fdin;
@@ -368,7 +407,8 @@ void first()
 	if (!fork()) rs232_xmit_msg_task();
 	//if (!fork()) setpriority(0, PRIORITY_DEFAULT - 10), queue_str_task1();
 	//if (!fork()) setpriority(0, PRIORITY_DEFAULT - 10), queue_str_task2();
-	if (!fork()) setpriority(0, PRIORITY_DEFAULT - 10), serial_readwrite_task();
+	//if (!fork()) setpriority(0, PRIORITY_DEFAULT - 10), serial_readwrite_task();
+	if (!fork()) setpriority(0, PRIORITY_DEFAULT - 10), serial_cmd_task();
 
 	setpriority(0, PRIORITY_LIMIT);
 
