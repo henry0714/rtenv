@@ -49,8 +49,32 @@ void puts(char *s)
     }
 }
 
-#define CMDLINE_MAX     100 /* Max size of a command */
-#define CMD_COUNT       4   /* Numbers of provided commands */
+void write_str(char *str)
+{
+    int fdout = mq_open("/tmp/mqueue/out", 0);
+    if(str)
+        write(fdout, str, strlen(str)+1);
+}
+
+char *itoa(int num)
+{
+    int negative = (num < 0) ? 1 : 0;
+    int i = 6;
+    static char buf[32] = {0};  // index 0 to 31
+
+    if(num == 0)
+        return "0";
+
+    if(negative) num = -num;
+    // i from 30 because str[31] must be '\0'
+    for(i=6;num>0 && i>0;i--,num/=10)
+        buf[i] = num%10 + '0';
+
+    buf[i] = '-';   // Dealing with negatives
+    return (negative) ? &buf[i] : &buf[i+1];
+}
+
+#define CMDLINE_MAX     50 /* Max size of a command */
 
 #define STACK_SIZE 512 /* Size of task stacks in words */
 #define TASK_LIMIT 8  /* Max number of tasks we can handle */
@@ -59,7 +83,7 @@ void puts(char *s)
 #define PIPE_LIMIT (TASK_LIMIT * 2)
 
 #define PATHSERVER_FD (TASK_LIMIT + 3) 
-    /* File descriptor of pipe to pathserver */
+/* File descriptor of pipe to pathserver */
 
 #define PRIORITY_DEFAULT 20
 #define PRIORITY_LIMIT (PRIORITY_DEFAULT * 2 - 1)
@@ -75,18 +99,34 @@ void puts(char *s)
 
 #define O_CREAT 4
 
+size_t task_count = 0;
+
+void cmd_echo(char*);
+void cmd_ps(char*);
+void cmd_hello(char*);
+void cmd_show(char*);
+
+enum {
+    CMD_ECHO,
+    CMD_PS,
+    CMD_HELLO,
+    CMD_SHOW,
+    CMD_COUNT
+};
+
 /* Command struct */
 struct Cmd {
     char *name;
-    unsigned int code;
+    void (*func)(char*);
+    char *info;
 };
 typedef struct Cmd Cmd;
 
 Cmd cmdlist[CMD_COUNT] = {
-    {"echo", 0},
-    {"ps", 1},
-    {"hello", 2},
-    {"show", 3}
+    {"echo", cmd_echo, "Print a string to the terminal"},
+    {"ps", cmd_ps, "Show the running processes"},
+    {"hello", cmd_hello, "Show the welcome message"},
+    {"show", cmd_show, "Show other things"}
 };
 
 /* Stack struct of user thread, see "Exception entry and return" */
@@ -121,6 +161,7 @@ struct task_control_block {
     struct task_control_block **prev;
     struct task_control_block  *next;
 };
+struct task_control_block tasks[TASK_LIMIT];
 
 /* 
  * pathserver assumes that all files are FIFOs that were registered
@@ -331,79 +372,155 @@ void queue_str_task2()
     queue_str_task("Hello 2\n", 50);
 }
 
-void cmd_interpret(char *cmd)
+void cmd_echo(char *str)
+{
+    write_str(str);
+    write_str("\n");
+}
+
+void cmd_ps(char *str)
+{
+    int i;
+    char *task_pid = NULL;
+    char *task_prior = NULL;
+    
+    write_str("PID PRIORITY\n");
+    for(i=0;i<task_count;i++)
+    {
+        task_pid = itoa(tasks[i].pid);
+        task_prior = itoa(tasks[i].priority);
+        write_str("  ");
+        write_str(task_pid);
+        write_str("\t");
+        write_str(task_prior);
+        write_str("\n");
+    }
+}
+
+void cmd_hello(char *str)
+{
+    write_str("Hello World!\n");
+}
+
+void cmd_show(char *str)
+{}
+
+int cmd_interpret(char *cmd)
 {
     int fdout = mq_open("/tmp/mqueue/out", 0);
-    int i;
-    int cmd_code = -1;
+    int i, i1, i2, i3, i4;
+    char *sub1;
+    char *sub2;
+
+    for(i1=0;i1<CMDLINE_MAX;i1++)
+    {
+        if(*(cmd+i1) == '\0') break;
+        else if(*(cmd+i1)!='\t' && *(cmd+i1)!=' ')
+            break;
+    }
+
+    for(i2=i1;i2<CMDLINE_MAX;i2++)
+    {
+        if(*(cmd+i2) == '\0') break;
+        else if(*(cmd+i2)=='\t' || *(cmd+i2)==' ')
+            break;
+    }
+
+    for(i3=i2;i3<CMDLINE_MAX;i3++)
+    {
+        if(*(cmd+i3) == '\0') break;
+        else if(*(cmd+i3)!='\t' && *(cmd+i3)!=' ')
+            break;
+    }
+
+    for(i4=i3;i4<CMDLINE_MAX;i4++)
+    {
+        if(*(cmd+i4) == '\0') break;
+        else if(*(cmd+i4)=='\t' || *(cmd+i4)==' ')
+            break;
+    }
+
+    *(cmd+i2) = '\0';
+    *(cmd+i4) = '\0';
+
+    //write(fdout, cmd+i1, i2-i1+1); 
+    //write(fdout, "\r\n\0", 3);
+    //write(fdout, cmd+i3, i4-i3+1); 
+    //write(fdout, "\r\n\0", 3);
+
     for(i=0;i<CMD_COUNT;i++)
     {
-        if(strcmp(cmdlist[i].name, cmd) == 0)
+        if(strcmp(cmd+i1, cmdlist[i].name) == 0)
         {
-            cmd_code = cmdlist[i].code;
-            break;
+            cmdlist[i].func(cmd+i3);
+            return 0;
         }
     }
 
-    switch(cmd_code)
-    {
-    case 1:
-        write(fdout, "ps!", 4);
-        break;
-    case 0:
-        write(fdout, cmd+5, strlen(cmd)-5+1);
-        break;
-    default:
-        write(fdout, "command not found\r\n\0", 20); 
-    }
+    //write(fdout, cmd+i1, i2-i1+1);
+    //write(fdout, ": command not found\r\n\0", 22);
+    write_str(cmd+i1);
+    write_str(": command not found\n");
 }
 
 void serial_cmd_task()
 {
     int fdout, fdin;
-    char hint[8] = "DShell>";
-    char str[CMDLINE_MAX];
+    char hint[9]; // = "DShell> ";
+    char str[CMDLINE_MAX] = {0};
     char cx[2] = {0};
     int char_count;
     int done;
+    int i;
+    int not_empty;
     
     fdout = mq_open("/tmp/mqueue/out", 0);
     fdin = open("/dev/tty0/in", 0);
 
     while(1)
     {
-        write(fdout, hint, 8);
-        char_count = 0;
+        memcpy(hint, "DShell> ", 9);
+        write(fdout, hint, strlen(hint)+1);
+        for(i=0;i<CMDLINE_MAX;i++)
+            str[i] = '\0';
+        str[0] = ' ';
+        char_count = 1;
         done = 0;
+        not_empty = 0;
         do
         {
             read(fdin, &cx[0], 1);
-            // Check if a command reaches CMDLINE_MAX-3 or "enter" is pressed
-            if(char_count >= (CMDLINE_MAX-3) || (cx[0] == '\r') || (cx[0] == '\n'))
+            if(char_count>=CMDLINE_MAX && (cx[0]!='\r' && cx[0]!='\n' && cx[0]!=127))
+                continue;
+
+            // Check if "enter" is pressed
+            if((cx[0] == '\r') || (cx[0] == '\n'))
             {
                 write(fdout, "\r\n\0", 3);
-                str[char_count] = '\r';
-                str[char_count+1] = '\n';
-                str[char_count+2] = '\0';
                 done = -1;
             }
             // Handling "backspace"
             else if(cx[0] == 127)
             {
-                if(char_count > 0)
+                if(char_count > 1)
                 {
                     write(fdout, "\b \b\0", 4);
                     char_count--;
                 }
+                if(not_empty > 0)
+                    not_empty--;
             }
             else
             {
                 str[char_count++] = cx[0];
                 write(fdout, cx, 2);
+                if(cx[0]!='\t' && cx[0]!=' ')
+                    not_empty++;
             }
         } while(!done);
-        cmd_interpret(str);
-        //write(fdout, str, char_count+1+1+1);
+
+        if(not_empty)
+            cmd_interpret(str);
     }
 }
 
@@ -763,11 +880,11 @@ _mknod(struct pipe_ringbuffer *pipe, int dev)
 int main()
 {
     unsigned int stacks[TASK_LIMIT][STACK_SIZE];
-    struct task_control_block tasks[TASK_LIMIT];
+    //struct task_control_block tasks[TASK_LIMIT];
     struct pipe_ringbuffer pipes[PIPE_LIMIT];
     struct task_control_block *ready_list[PRIORITY_LIMIT + 1];  /* [0 ... 39] */
     struct task_control_block *wait_list = NULL;
-    size_t task_count = 0;
+    //size_t task_count = 0;
     size_t current_task = 0;
     size_t i;
     struct task_control_block *task;
